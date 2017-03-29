@@ -1,194 +1,112 @@
-#######################################################################
-# Copyright (C)                                                       #
-# 2016 Shangtong Zhang(zhangshangtong.cpp@gmail.com)                  #
-# 2016 Kenta Shimada(hyperkentakun@gmail.com)                         #
-# Permission given to modify the code as long as you keep this        #
-# declaration at the top                                              #
-#######################################################################
-
-from __future__ import print_function
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-#from utils.utils import *
-from math import *
 
-# maximum # of cars in each location
-MAX_CARS = 20
 
-# maximum # of cars to move during night
-MAX_MOVE_OF_CARS = 5
-
-# expectation for rental requests in first location
-RENTAL_REQUEST_FIRST_LOC = 3
-
-# expectation for rental requests in second location
-RENTAL_REQUEST_SECOND_LOC = 4
-
-# expectation for # of cars returned in first location
-RETURNS_FIRST_LOC = 3
-
-# expectation for # of cars returned in second location
-RETURNS_SECOND_LOC = 2
-
+MAX_CAR_NUM = 20
+MAX_MOV_OF_CARS = 5
+EXPT_REQUEST_FIR_LOC = 3
+EXPT_REQUEST_SEC_LOC = 4
+EXPT_RETURN_FIR_LOC = 3
+EXPT_RETURN_SEC_LOC = 2
+MOV_COST = 2
 DISCOUNT = 0.9
+CREDIT = 10
+POSSION_UP_BOUND = 11
 
-# credit earned by a car
-RENTAL_CREDIT = 10
-
-# cost of moving a car
-MOVE_CAR_COST = 2
-
-# current policy
-policy = np.zeros((MAX_CARS + 1, MAX_CARS + 1))
-
-# current state value
-stateValue = np.zeros((MAX_CARS + 1, MAX_CARS + 1))
-
-# all possible states
+state_value = np.zeros((MAX_CAR_NUM + 1, MAX_CAR_NUM + 1))
+policy = np.zeros((MAX_CAR_NUM + 1, MAX_CAR_NUM + 1))
 states = []
+actions = np.arange(-MAX_MOV_OF_CARS, MAX_MOV_OF_CARS + 1)
 
-# all possible actions
-actions = np.arange(-MAX_MOVE_OF_CARS, MAX_MOVE_OF_CARS + 1)
-
-# axes for printing use
-AxisXPrint = []
-AxisYPrint = []
-for i in range(0, MAX_CARS + 1):
-    for j in range(0, MAX_CARS + 1):
-        AxisXPrint.append(i)
-        AxisYPrint.append(j)
-        states.append([i, j])
-
-
-# plot a policy/state value matrix
-figureIndex = 0
-def prettyPrint(data, labels):
-    global figureIndex
-    fig = plt.figure(figureIndex)
-    figureIndex += 1
-    ax = fig.add_subplot(111, projection='3d')
-    AxisZ = []
+figure_num = 0
+def display(data, labels):
+    global figure_num
+    fig = plt.figure(figure_num)
+    figure_num += 1
+    ax = fig.add_subplot(111, projection = '3d')
+    zs = []
     for i, j in states:
-        AxisZ.append(data[i, j])
-    ax.scatter(AxisXPrint, AxisYPrint, AxisZ)
+        zs.append(data[i, j])
+    ax.scatter([x for x, y in states], [y for x, y in states], zs)
     ax.set_xlabel(labels[0])
     ax.set_ylabel(labels[1])
     ax.set_zlabel(labels[2])
 
-# An up bound for poisson distribution
-# If n is greater than this value, then the probability of getting n is truncated to 0
-POISSON_UP_BOUND = 11
+for i in range(MAX_CAR_NUM + 1):
+    for j in range(MAX_CAR_NUM + 1):
+        states.append([i, j])
 
-# Probability for poisson distribution
-# @lam: lambda should be less than 10 for this function
-poissonBackup = dict()
-def poisson(n, lam):
-    global poissonBackup
-    key = n * 10 + lam
-    if key not in poissonBackup.keys():
-        poissonBackup[key] = exp(-lam) * pow(lam, n) / factorial(n)
-    return poissonBackup[key]
+possion_backup = dict()
+def possion(n ,lambd):
+    key = 10 * n + lambd
+    if key not in possion_backup.keys():
+        possion_backup[key] = pow(lambd, n) * np.exp(-lambd) / np.math.factorial(n)
+    return possion_backup[key]
 
-# @state: [# of cars in first location, # of cars in second location]
-# @action: positive if moving cars from first location to second location,
-#          negative if moving cars from second location to first location
-# @stateValue: state value matrix
-def expectedReturn(state, action, stateValue):
-    # initailize total return
+def expect_return(state, action):
+    global state_value
     returns = 0.0
-
-    # cost for moving cars
-    returns -= MOVE_CAR_COST * abs(action)
-
-    # go through all possible rental requests
-    for rentalRequestFirstLoc in range(0, POISSON_UP_BOUND):
-        for rentalRequestSecondLoc in range(0, POISSON_UP_BOUND):
-            # moving cars
-            numOfCarsFirstLoc = int(min(state[0] - action, MAX_CARS))
-            numOfCarsSecondLoc = int(min(state[1] + action, MAX_CARS))
-
-            # valid rental requests should be less than actual # of cars
-            realRentalFirstLoc = min(numOfCarsFirstLoc, rentalRequestFirstLoc)
-            realRentalSecondLoc = min(numOfCarsSecondLoc, rentalRequestSecondLoc)
-
-            # get credits for renting
-            reward = (realRentalFirstLoc + realRentalSecondLoc) * RENTAL_CREDIT
-            numOfCarsFirstLoc -= realRentalFirstLoc
-            numOfCarsSecondLoc -= realRentalSecondLoc
-
-            # probability for current combination of rental requests
-            prob = poisson(rentalRequestFirstLoc, RENTAL_REQUEST_FIRST_LOC) * \
-                         poisson(rentalRequestSecondLoc, RENTAL_REQUEST_SECOND_LOC)
-
-            # if set True, model is simplified such that the # of cars returned in daytime becomes constant
-            # rather than a random value from poisson distribution, which will reduce calculation time
-            # and leave the optimal policy/value state matrix almost the same
-            constantReturnedCars = True
-            if constantReturnedCars:
-                # get returned cars, those cars can be used for renting tomorrow
-                returnedCarsFirstLoc = RETURNS_FIRST_LOC
-                returnedCarsSecondLoc = RETURNS_SECOND_LOC
-                numOfCarsFirstLoc = min(numOfCarsFirstLoc + returnedCarsFirstLoc, MAX_CARS)
-                numOfCarsSecondLoc = min(numOfCarsSecondLoc + returnedCarsSecondLoc, MAX_CARS)
-                returns += prob * (reward + DISCOUNT * stateValue[numOfCarsFirstLoc, numOfCarsSecondLoc])
+    returns -= MOV_COST * abs(action)
+    for request_fir_loc in range(POSSION_UP_BOUND):
+        for request_sec_loc in range(POSSION_UP_BOUND):
+            cars_fir_loc = min(state[0] - action, MAX_CAR_NUM)
+            cars_sec_loc = min(state[1] + action, MAX_CAR_NUM)
+            real_rental_fir_loc = min(request_fir_loc, cars_fir_loc)
+            real_rental_sec_loc = min(request_sec_loc, cars_sec_loc)
+            cars_fir_loc -= real_rental_fir_loc
+            cars_sec_loc -= real_rental_sec_loc
+            reward = (real_rental_fir_loc + real_rental_sec_loc) * CREDIT
+            prob = possion(request_fir_loc, EXPT_REQUEST_FIR_LOC) * possion(request_sec_loc, EXPT_REQUEST_SEC_LOC)
+            const_ret = False
+            if const_ret:
+                for ret_fir_loc in range(POSSION_UP_BOUND):
+                    for ret_sec_loc in range(POSSION_UP_BOUND):
+                        prob_ = possion(ret_fir_loc, EXPT_RETURN_FIR_LOC) * possion(ret_sec_loc, EXPT_RETURN_SEC_LOC) * prob
+                        cars_fir_loc_ = int(min(cars_fir_loc + ret_fir_loc, MAX_CAR_NUM))
+                        cars_sec_loc_ = int(min(cars_sec_loc + ret_sec_loc, MAX_CAR_NUM))
+                        returns += prob_ * (reward + DISCOUNT * state_value[cars_fir_loc_, cars_sec_loc_])
             else:
-                numOfCarsFirstLoc_ = numOfCarsFirstLoc
-                numOfCarsSecondLoc_ = numOfCarsSecondLoc
-                prob_ = prob
-                for returnedCarsFirstLoc in range(0, POISSON_UP_BOUND):
-                    for returnedCarsSecondLoc in range(0, POISSON_UP_BOUND):
-                        numOfCarsFirstLoc = numOfCarsFirstLoc_
-                        numOfCarsSecondLoc = numOfCarsSecondLoc_
-                        prob = prob_
-                        numOfCarsFirstLoc = min(numOfCarsFirstLoc + returnedCarsFirstLoc, MAX_CARS)
-                        numOfCarsSecondLoc = min(numOfCarsSecondLoc + returnedCarsSecondLoc, MAX_CARS)
-                        prob = poisson(returnedCarsFirstLoc, RETURNS_FIRST_LOC) * \
-                               poisson(returnedCarsSecondLoc, RETURNS_SECOND_LOC) * prob
-                        returns += prob * (reward + DISCOUNT * stateValue[numOfCarsFirstLoc, numOfCarsSecondLoc])
+                cars_fir_loc_ = int(min(cars_fir_loc + EXPT_RETURN_FIR_LOC, MAX_CAR_NUM))
+                cars_sec_loc_ = int(min(cars_sec_loc + EXPT_RETURN_SEC_LOC, MAX_CAR_NUM))
+                returns += prob * (reward + DISCOUNT * state_value[cars_fir_loc_, cars_sec_loc_])
+
     return returns
 
-
-newStateValue = np.zeros((MAX_CARS + 1, MAX_CARS + 1))
-improvePolicy = False
-policyImprovementInd = 0
+new_state_value = np.zeros((MAX_CAR_NUM + 1, MAX_CAR_NUM + 1))
+improve_policy = False
+policy_improve_idx = 1
 while True:
-    if improvePolicy == True:
-        # start policy improvement
-        print('Policy improvement', policyImprovementInd)
-        policyImprovementInd += 1
-        newPolicy = np.zeros((MAX_CARS + 1, MAX_CARS + 1))
+    if improve_policy:
+        new_policy = np.zeros((MAX_CAR_NUM + 1, MAX_CAR_NUM + 1))
+        print('improvement', policy_improve_idx)
+        policy_improve_idx += 1
         for i, j in states:
-            actionReturns = []
-            # go through all actions and select the best one
+            action_value = []
             for action in actions:
                 if (action >= 0 and i >= action) or (action < 0 and j >= abs(action)):
-                    actionReturns.append(expectedReturn([i, j], action, stateValue))
+                    action_value.append(expect_return([i, j], action))
                 else:
-                    actionReturns.append(-float('inf'))
-            bestAction = np.argmax(actionReturns)
-            newPolicy[i, j] = actions[bestAction]
-
-        # if policy is stable
-        policyChanges = np.sum(newPolicy != policy)
-        print('Policy for', policyChanges, 'states changed')
-        if policyChanges == 0:
-            policy = newPolicy
+                    action_value.append(-float('inf'))
+            best_action = actions[np.argmax(action_value)]
+            new_policy[i, j] = best_action
+        policy_changed_num = np.sum(new_policy != policy)
+        policy[:] = new_policy
+        print(policy_changed_num,'policies changed')
+        improve_policy = False
+        if policy_changed_num == 0:
             break
-        policy = newPolicy
 
-    # start policy evaluation
+    #policy evaluation
     for i, j in states:
-        newStateValue[i, j] = expectedReturn([i, j], policy[i, j], stateValue)
-    if np.sum(np.abs(newStateValue - stateValue)) < 1e-4:
-        stateValue[:] = newStateValue
-        improvePolicy = True
+        new_state_value[i, j] = expect_return([i,j], policy[i, j])
+    if np.sum(np.abs(new_state_value - state_value)) < 1e-4:
+        state_value[:] = new_state_value
+        improve_policy = True
         continue
-    stateValue[:] = newStateValue
+    state_value[:] = new_state_value
 
-prettyPrint(policy, ['# of cars in first location', '# of cars in second location', '# of cars to move during night'])
-prettyPrint(stateValue, ['# of cars in first location', '# of cars in second location', 'expected returns'])
+display(policy, ['cars in first location', 'cars in second location', 'cars to move during night'])
+display(state_value, ['cars in first location', 'cars in second location', 'expected returns'])
 plt.show()
-
-
 
